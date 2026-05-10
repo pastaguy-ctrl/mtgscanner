@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MTG Card Scanner</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --gold: #c9a84c; --gold-dark: #8a6a1a;
+  --bg: #0d0a05; --bg-card: #16110a; --bg-surf: #1f180e;
+  --border: rgba(201,168,76,0.28); --border-hi: rgba(201,168,76,0.6);
+  --text: #f0e6cc; --muted: #8a7a5a;
+}
+body { font-family: Georgia, serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+
+header { width: 100%; padding: 1.4rem 1rem 1rem; text-align: center; border-bottom: 1px solid var(--border); }
+header h1 { font-size: clamp(1.2rem,4vw,1.9rem); color: var(--gold); letter-spacing: 0.06em; margin-bottom: 0.15rem; }
+header p { font-size: 0.82rem; color: var(--muted); font-style: italic; }
+
+main { width: 100%; max-width: 860px; padding: 1.2rem 1rem; display: flex; flex-direction: column; gap: 1rem; }
+
+/* Scanner panel */
+.panel { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); overflow: hidden; }
+
+.camera-area { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#video { width: 100%; height: 100%; object-fit: cover; display: none; }
+#canvas { display: none; }
+#cropCanvas { display: none; }
+
+.placeholder { display: flex; flex-direction: column; align-items: center; gap: 0.8rem; color: var(--muted); }
+.placeholder svg { width: 50px; height: 50px; opacity: 0.35; stroke: var(--gold); fill: none; stroke-width: 1.3; stroke-linecap: round; }
+
+/* Card frame overlay */
+.frame-wrap { position: absolute; inset: 0; display: none; pointer-events: none; }
+.frame-wrap.on { display: block; }
+.frame-svg { width: 100%; height: 100%; }
+
+/* Bottom strip highlight */
+.strip-label { position: absolute; bottom: 18%; left: 50%; transform: translateX(-50%); background: rgba(201,168,76,0.15); border: 1px solid rgba(201,168,76,0.5); border-radius: 4px; padding: 2px 10px; font-size: 0.7rem; color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
+
+.controls { padding: 0.9rem 1.1rem; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.status-txt { font-size: 0.82rem; color: var(--muted); font-style: italic; flex: 1; min-width: 120px; }
+button { font-family: Georgia, serif; font-size: 0.78rem; padding: 0.5rem 1.1rem; border-radius: 6px; cursor: pointer; transition: all 0.18s; border: 1px solid; letter-spacing: 0.03em; }
+.btn-cam { background: #1e1608; color: var(--gold); border-color: var(--gold-dark); }
+.btn-cam:hover:not(:disabled) { background: #2e2210; border-color: var(--gold); }
+.btn-scan { background: #1a0d0d; color: #e07070; border-color: #6a2a2a; margin-left: auto; }
+.btn-scan:hover:not(:disabled) { background: #2d1515; border-color: #c04040; }
+button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* OCR preview strip */
+.strip-preview { display: none; padding: 0.7rem 1.1rem; border-top: 1px solid var(--border); background: var(--bg-surf); }
+.strip-preview.on { display: block; }
+.strip-preview p { font-size: 0.72rem; color: var(--muted); margin-bottom: 4px; letter-spacing: 0.05em; }
+#stripImg { width: 100%; border-radius: 4px; border: 1px solid var(--border); image-rendering: pixelated; }
+#ocrRaw { font-size: 0.72rem; color: var(--muted); font-family: monospace; margin-top: 4px; word-break: break-all; }
+
+/* Result */
+.result { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); display: none; }
+.result.on { display: block; }
+
+.loading { display: none; flex-direction: column; align-items: center; gap: 0.8rem; padding: 2.2rem; color: var(--muted); }
+.loading.on { display: flex; }
+.spinner { width: 36px; height: 36px; border: 2px solid var(--border); border-top-color: var(--gold); border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-msg { font-size: 0.88rem; font-style: italic; }
+
+.error-box { display: none; margin: 1rem; padding: 0.9rem 1.1rem; background: rgba(180,50,50,0.1); border: 1px solid rgba(180,50,50,0.35); border-radius: 7px; color: #e07070; font-size: 0.85rem; line-height: 1.55; }
+.error-box.on { display: block; }
+
+/* Card display */
+.card-display { display: none; }
+.card-display.on { display: block; }
+
+.card-header { display: flex; gap: 1rem; padding: 1.1rem; border-bottom: 1px solid var(--border); }
+.card-img-wrap { flex-shrink: 0; }
+.card-img-wrap img { width: 120px; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.card-img-wrap .no-img { width: 120px; height: 167px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-surf); display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 0.75rem; text-align: center; padding: 8px; }
+.card-title-area { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.card-name-display { font-size: clamp(1.1rem,3.5vw,1.6rem); color: var(--text); line-height: 1.2; }
+.card-type-display { font-size: 0.87rem; color: var(--muted); font-style: italic; }
+.mana-row { display: flex; gap: 3px; flex-wrap: wrap; }
+.pip { width: 21px; height: 21px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; font-family: monospace; border: 1px solid rgba(255,255,255,0.12); flex-shrink: 0; }
+
+.card-body { padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 7px; }
+.stat { background: var(--bg-surf); border: 1px solid var(--border); border-radius: 6px; padding: 7px 11px; }
+.stat-lbl { font-size: 0.67rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+.stat-val { font-size: 0.9rem; }
+.oracle-box { background: var(--bg-surf); border: 1px solid var(--border); border-left: 3px solid var(--gold-dark); border-radius: 0 6px 6px 0; padding: 9px 13px; font-size: 0.9rem; line-height: 1.65; white-space: pre-line; }
+.flavor-box { font-style: italic; color: var(--muted); font-size: 0.83rem; line-height: 1.6; padding-top: 8px; border-top: 1px solid var(--border); }
+.legalities { display: flex; flex-wrap: wrap; gap: 5px; }
+.leg-badge { font-size: 0.68rem; padding: 2px 8px; border-radius: 4px; letter-spacing: 0.04em; }
+.leg-legal { background: rgba(40,120,60,0.25); color: #70d090; border: 1px solid rgba(40,120,60,0.4); }
+.leg-not { background: rgba(120,40,40,0.2); color: #d07070; border: 1px solid rgba(120,40,40,0.35); }
+.leg-restricted { background: rgba(120,100,20,0.25); color: #d0b050; border: 1px solid rgba(120,100,20,0.4); }
+
+.prices { display: flex; gap: 8px; flex-wrap: wrap; }
+.price-tag { background: var(--bg-surf); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; text-align: center; }
+.price-label { font-size: 0.67rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
+.price-val { font-size: 1rem; color: var(--gold); font-weight: bold; margin-top: 1px; }
+
+.scryfall-link { display: inline-block; font-size: 0.78rem; color: var(--gold); text-decoration: none; border: 1px solid var(--border); border-radius: 5px; padding: 5px 12px; transition: border-color 0.15s; }
+.scryfall-link:hover { border-color: var(--border-hi); }
+
+/* History */
+.history { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); display: none; }
+.history.on { display: block; }
+.hist-head { padding: 0.7rem 1.1rem; border-bottom: 1px solid var(--border); font-size: 0.7rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.hist-list { padding: 0.5rem; display: flex; flex-direction: column; gap: 3px; }
+.hist-item { background: var(--bg-surf); border: 1px solid var(--border); border-radius: 5px; padding: 6px 11px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 0.83rem; transition: border-color 0.15s; }
+.hist-item:hover { border-color: var(--border-hi); }
+
+/* Manual fallback */
+.manual-section { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); overflow: hidden; }
+.manual-head { padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--border); font-size: 0.7rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+.manual-head span { color: var(--gold); font-size: 0.75rem; }
+.manual-body { padding: 1rem 1.1rem; display: none; flex-direction: column; gap: 0.7rem; }
+.manual-body.on { display: flex; }
+.input-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 100px; }
+.field label { font-size: 0.7rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.field input { background: var(--bg-surf); border: 1px solid var(--border); border-radius: 5px; padding: 0.45rem 0.7rem; color: var(--text); font-size: 0.88rem; font-family: Georgia, serif; outline: none; }
+.field input:focus { border-color: var(--gold-dark); }
+.btn-lookup { background: #1e1608; color: var(--gold); border-color: var(--gold-dark); align-self: flex-end; }
+.btn-lookup:hover { background: #2e2210; border-color: var(--gold); }
+
+footer { padding: 1rem; text-align: center; color: var(--muted); font-size: 0.75rem; font-style: italic; border-top: 1px solid var(--border); width: 100%; margin-top: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚔ Arcane Scanner</h1>
+  <p>Free MTG card identifier — powered by Scryfall &amp; Tesseract OCR</p>
+</header>
+
+<main>
+  <!-- Camera scanner -->
+  <div class="panel">
+    <div class="camera-area">
+      <div class="placeholder" id="placeholder">
+        <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <p style="font-size:0.85rem">Press Open Camera to begin</p>
+      </div>
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+      <canvas id="cropCanvas"></canvas>
+      <div class="frame-wrap" id="frameWrap">
+        <!-- SVG overlay with card frame and bottom strip highlight -->
+        <svg class="frame-svg" viewBox="0 0 100 75" preserveAspectRatio="none">
+          <defs>
+            <mask id="cutout">
+              <rect width="100" height="75" fill="white"/>
+              <rect x="28" y="3" width="44" height="61.6" rx="1.5" fill="black"/>
+            </mask>
+          </defs>
+          <rect width="100" height="75" fill="rgba(0,0,0,0.38)" mask="url(#cutout)"/>
+          <!-- card outline -->
+          <rect x="28" y="3" width="44" height="61.6" rx="1.5" fill="none" stroke="rgba(201,168,76,0.75)" stroke-width="0.4"/>
+          <!-- bottom strip highlight (collector number area) -->
+          <rect x="28" y="57" width="44" height="7.6" rx="0" fill="rgba(201,168,76,0.12)" stroke="rgba(201,168,76,0.5)" stroke-width="0.3"/>
+        </svg>
+        <div class="strip-label">▼ Collector number &amp; set code</div>
+      </div>
+    </div>
+
+    <div class="strip-preview" id="stripPreview">
+      <p>CAPTURED STRIP (bottom of card)</p>
+      <img id="stripImg" alt="strip" />
+      <div id="ocrRaw"></div>
+    </div>
+
+    <div class="controls">
+      <span class="status-txt" id="statusTxt">Open camera and hold card steady</span>
+      <button class="btn-cam" id="btnCam" onclick="toggleCamera()">Open Camera</button>
+      <button class="btn-scan" id="btnScan" onclick="scanCard()" disabled>Scan Card</button>
+    </div>
+  </div>
+
+  <!-- Result panel -->
+  <div class="result" id="resultPanel">
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <div class="loading-msg" id="loadingMsg">Loading Tesseract…</div>
+    </div>
+    <div class="error-box" id="errorBox"></div>
+    <div class="card-display" id="cardDisplay"></div>
+  </div>
+
+  <!-- Manual fallback -->
+  <div class="manual-section">
+    <div class="manual-head" onclick="toggleManual()">
+      Manual lookup (if scan fails)
+      <span id="manualToggle">▼ Show</span>
+    </div>
+    <div class="manual-body" id="manualBody">
+      <div class="input-row">
+        <div class="field">
+          <label>Set Code (e.g. MH3)</label>
+          <input type="text" id="manualSet" placeholder="MH3" maxlength="6" style="text-transform:uppercase"/>
+        </div>
+        <div class="field">
+          <label>Collector Number</label>
+          <input type="text" id="manualNum" placeholder="142" maxlength="6"/>
+        </div>
+      </div>
+      <button class="btn-lookup" onclick="manualLookup()">Look Up →</button>
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="history" id="historyPanel">
+    <div class="hist-head">Recently scanned</div>
+    <div class="hist-list" id="histList"></div>
+  </div>
+</main>
+
+<footer>Uses Tesseract.js OCR + Scryfall API · 100% free · No API key needed</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const MANA_CFG = {
+  W:{bg:'#f0e8c8',color:'#6a5010'},U:{bg:'#1a3a6a',color:'#a0c8f8'},
+  B:{bg:'#2a1a3a',color:'#c0a8e0'},R:{bg:'#6a2010',color:'#f8a080'},
+  G:{bg:'#0f4020',color:'#80e0a0'},C:{bg:'#404040',color:'#d0d0d0'},
+  X:{bg:'#333',color:'#ccc'},0:{bg:'#555',color:'#eee'}
+};
+const RARITY_COL = {common:'#aaa',uncommon:'#5ab8c4',rare:'#c8a840',mythic:'#e07030',special:'#c060e0'};
+
+let stream = null;
+let cameraOn = false;
+let worker = null;
+let workerReady = false;
+let history = [];
+let manualOpen = false;
+
+// Init Tesseract worker on page load
+async function initTesseract() {
+  try {
+    worker = await Tesseract.createWorker('eng', 1, {
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          setLoadMsg('Reading text… ' + Math.round(m.progress * 100) + '%');
+        }
+      }
+    });
+    // Whitelist chars found on MTG card bottoms: letters, digits, slash, space
+    await worker.setParameters({
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/★● ',
+    });
+    workerReady = true;
+  } catch(e) {
+    console.error('Tesseract init failed', e);
+  }
+}
+initTesseract();
+
+async function toggleCamera() {
+  if (cameraOn) { stopCamera(); return; }
+  setStatus('Requesting camera access…');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1440 } }
+    });
+    const v = document.getElementById('video');
+    v.srcObject = stream;
+    await v.play();
+    v.style.display = 'block';
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('frameWrap').classList.add('on');
+    document.getElementById('btnCam').textContent = 'Stop Camera';
+    document.getElementById('btnScan').disabled = false;
+    cameraOn = true;
+    setStatus('Hold card steady — bottom strip in the gold zone — then Scan');
+  } catch(e) {
+    showError('Camera access denied.\n\n' + e.message + '\n\nAllow camera permissions in your browser settings, then try again.');
+    setStatus('Camera denied');
+  }
+}
+
+function stopCamera() {
+  stream?.getTracks().forEach(t => t.stop());
+  stream = null;
+  const v = document.getElementById('video');
+  v.style.display = 'none';
+  v.srcObject = null;
+  document.getElementById('placeholder').style.display = 'flex';
+  document.getElementById('frameWrap').classList.remove('on');
+  document.getElementById('btnCam').textContent = 'Open Camera';
+  document.getElementById('btnScan').disabled = true;
+  cameraOn = false;
+  setStatus('Camera stopped');
+}
+
+async function scanCard() {
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const cropCanvas = document.getElementById('cropCanvas');
+
+  // Full frame capture
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  // The card frame overlay spans roughly x:28–72%, y:3–64.6% of the view
+  // The bottom strip (collector number area) is y:57–64.6% within that
+  // We crop just the bottom strip of the card for OCR
+  const cw = canvas.width, ch = canvas.height;
+  const cardLeft   = cw * 0.28;
+  const cardRight  = cw * 0.72;
+  const stripTop   = ch * (57/75);
+  const stripBot   = ch * (64.6/75);
+  const stripW = cardRight - cardLeft;
+  const stripH = stripBot - stripTop;
+
+  // Scale up for better OCR
+  const scale = 4;
+  cropCanvas.width  = stripW * scale;
+  cropCanvas.height = stripH * scale;
+  const ctx = cropCanvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(canvas, cardLeft, stripTop, stripW, stripH, 0, 0, cropCanvas.width, cropCanvas.height);
+
+  // Increase contrast for OCR
+  const imgData = ctx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // Grayscale + boost contrast
+    const gray = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+    const contrasted = Math.min(255, Math.max(0, (gray - 128) * 1.8 + 128));
+    d[i] = d[i+1] = d[i+2] = contrasted;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // Show strip preview
+  document.getElementById('stripImg').src = cropCanvas.toDataURL('image/png');
+  document.getElementById('stripPreview').classList.add('on');
+
+  // Show loading
+  showLoading('Reading card text…');
+
+  if (!workerReady) {
+    // Wait up to 10s for worker
+    let waited = 0;
+    while (!workerReady && waited < 10000) {
+      await new Promise(r => setTimeout(r, 300));
+      waited += 300;
+    }
+    if (!workerReady) { showError('OCR engine failed to load. Try refreshing.'); return; }
+  }
+
+  try {
+    setLoadMsg('Running OCR on strip…');
+    const result = await worker.recognize(cropCanvas);
+    const raw = result.data.text;
+    document.getElementById('ocrRaw').textContent = 'OCR raw: ' + raw.replace(/\n/g, ' | ');
+
+    const parsed = parseCollectorLine(raw);
+    if (!parsed) {
+      showError(
+        'Could not read the collector number from the card bottom.\n\n' +
+        'OCR saw: "' + raw.trim() + '"\n\n' +
+        'Tips:\n• Make sure the bottom strip is inside the gold zone\n' +
+        '• Try better lighting with no glare\n' +
+        '• Hold the card flat and close to the camera\n' +
+        '• Use the Manual Lookup below as a fallback'
+      );
+      return;
+    }
+
+    setLoadMsg('Looking up on Scryfall…');
+    await scryfallLookup(parsed.set, parsed.num);
+  } catch(e) {
+    showError('OCR error: ' + e.message);
+  }
+}
+
+function parseCollectorLine(text) {
+  // MTG bottom line format: "142/281 ★ M MH3" or "★ M 142/281 MH3"
+  // We need: set code (3-5 uppercase letters) and collector number (digits, sometimes /total)
+  const clean = text.replace(/\n/g, ' ').toUpperCase();
+
+  // Extract set code: 3-5 capital letters that look like a set (not a rarity letter alone)
+  // Rarity: C U R M (single char) — ignore those
+  const setMatch = clean.match(/\b([A-Z]{2,6})\b/g) || [];
+  // Filter to likely set codes: 3-5 chars, not purely common words
+  const ignoredWords = new Set(['THE','AND','FOR','WITH','YOU','ARE','NOT','HAS','CAN','ALL','HIS','HER','ITS','BUT']);
+  const setCandidates = setMatch.filter(w => w.length >= 2 && w.length <= 6 && !ignoredWords.has(w));
+
+  // Extract collector number: digits optionally followed by /digits
+  const numMatch = clean.match(/\b(\d{1,4})(\/\d+)?\b/);
+  const num = numMatch ? numMatch[1] : null;
+
+  // Best set guess: prefer 3-4 char codes, last one found (usually at end of line)
+  const setCode = setCandidates.filter(s => s.length >= 3 && s.length <= 5).slice(-1)[0];
+
+  if (!num || !setCode) return null;
+  return { set: setCode.toLowerCase(), num };
+}
+
+async function scryfallLookup(set, num) {
+  try {
+    const url = `https://api.scryfall.com/cards/${encodeURIComponent(set)}/${encodeURIComponent(num)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 404) {
+        showError(`Card not found on Scryfall.\nSet: ${set.toUpperCase()}, Number: ${num}\n\nCheck the set code and number are correct, or use Manual Lookup below.`);
+      } else {
+        showError('Scryfall error: ' + res.status);
+      }
+      return;
+    }
+    const card = await res.json();
+    renderCard(card);
+    history.unshift(card);
+    if (history.length > 8) history.pop();
+    renderHistory();
+  } catch(e) {
+    showError('Network error looking up Scryfall:\n' + e.message);
+  }
+}
+
+function renderCard(card) {
+  hideLoading();
+  const el = document.getElementById('cardDisplay');
+  el.classList.add('on');
+  document.getElementById('resultPanel').classList.add('on');
+
+  // Mana cost pips
+  const pips = (card.mana_cost || '').match(/\{([^}]+)\}/g)?.map(p => p.replace(/[{}]/g,'')) || [];
+  const pipHtml = pips.map(p => {
+    const c = MANA_CFG[p] || {bg:'#444',color:'#ccc'};
+    return `<span class="pip" style="background:${c.bg};color:${c.color}" title="{${p}}">${p}</span>`;
+  }).join('');
+
+  // Image
+  const imgUrl = card.image_uris?.normal || card.image_uris?.large || card.card_faces?.[0]?.image_uris?.normal || '';
+  const imgHtml = imgUrl
+    ? `<img src="${imgUrl}" alt="${card.name}" loading="lazy"/>`
+    : `<div class="no-img">No image</div>`;
+
+  // Rarity color
+  const rarCol = RARITY_COL[card.rarity] || '#aaa';
+
+  // Stats
+  const stats = [
+    { l:'Set', v: (card.set_name || card.set?.toUpperCase()) },
+    { l:'Set Code', v: card.set?.toUpperCase() },
+    { l:'Collector #', v: card.collector_number },
+    { l:'Rarity', v: card.rarity?.charAt(0).toUpperCase()+card.rarity?.slice(1), c: rarCol },
+    card.power != null ? { l:'Power / Toughness', v: card.power + ' / ' + card.toughness } : null,
+    card.loyalty ? { l:'Loyalty', v: card.loyalty } : null,
+    card.artist ? { l:'Artist', v: card.artist } : null,
+    card.released_at ? { l:'Released', v: card.released_at } : null,
+  ].filter(Boolean);
+
+  const statsHtml = stats.map(s =>
+    `<div class="stat"><div class="stat-lbl">${s.l}</div><div class="stat-val" style="${s.c?'color:'+s.c:''}">${s.v}</div></div>`
+  ).join('');
+
+  // Oracle text (handle dual-faced)
+  const oracle = card.oracle_text || card.card_faces?.map(f => `[${f.name}]\n${f.oracle_text}`).join('\n\n---\n\n') || '';
+
+  // Flavor
+  const flavor = card.flavor_text || card.card_faces?.find(f=>f.flavor_text)?.flavor_text || '';
+
+  // Prices
+  const prices = card.prices || {};
+  const priceHtml = ['usd','usd_foil','eur'].map(k => {
+    if (!prices[k]) return '';
+    const labels = {usd:'USD',usd_foil:'USD Foil',eur:'EUR'};
+    return `<div class="price-tag"><div class="price-label">${labels[k]}</div><div class="price-val">$${prices[k]}</div></div>`;
+  }).join('');
+
+  // Legalities (show only legal/restricted formats)
+  const legs = card.legalities || {};
+  const legalFormats = Object.entries(legs).filter(([,v])=>v!=='not_legal').map(([fmt,v]) => {
+    const cls = v==='legal'?'leg-legal':v==='restricted'?'leg-restricted':'leg-not';
+    return `<span class="leg-badge ${cls}">${fmt}</span>`;
+  });
+
+  el.innerHTML = `
+    <div class="card-header">
+      <div class="card-img-wrap">${imgHtml}</div>
+      <div class="card-title-area">
+        <div class="card-name-display">${card.name}</div>
+        <div class="card-type-display">${card.type_line || ''}</div>
+        ${pipHtml ? `<div class="mana-row">${pipHtml}</div>` : ''}
+        ${card.scryfall_uri ? `<a class="scryfall-link" href="${card.scryfall_uri}" target="_blank">View on Scryfall ↗</a>` : ''}
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="stat-grid">${statsHtml}</div>
+      ${oracle ? `<div class="oracle-box">${oracle}</div>` : ''}
+      ${flavor ? `<div class="flavor-box">"${flavor}"</div>` : ''}
+      ${priceHtml ? `<div><div class="stat-lbl" style="margin-bottom:6px">Market Prices</div><div class="prices">${priceHtml}</div></div>` : ''}
+      ${legalFormats.length ? `<div><div class="stat-lbl" style="margin-bottom:6px">Legality</div><div class="legalities">${legalFormats.join('')}</div></div>` : ''}
+    </div>`;
+}
+
+function renderHistory() {
+  const panel = document.getElementById('historyPanel');
+  const list = document.getElementById('histList');
+  if (history.length < 2) { panel.classList.remove('on'); return; }
+  panel.classList.add('on');
+  list.innerHTML = history.slice(1).map((c,i) =>
+    `<div class="hist-item" onclick="showFromHistory(${i+1})">
+      <span>${c.name}</span>
+      <span style="color:var(--muted);font-style:italic;font-size:0.78rem">${c.set?.toUpperCase()} #${c.collector_number}</span>
+    </div>`
+  ).join('');
+}
+
+function showFromHistory(i) {
+  renderCard(history[i]);
+  window.scrollTo({top: document.getElementById('resultPanel').offsetTop - 20, behavior:'smooth'});
+}
+
+function toggleManual() {
+  manualOpen = !manualOpen;
+  document.getElementById('manualBody').classList.toggle('on', manualOpen);
+  document.getElementById('manualToggle').textContent = manualOpen ? '▲ Hide' : '▼ Show';
+}
+
+async function manualLookup() {
+  const set = document.getElementById('manualSet').value.trim().toLowerCase();
+  const num = document.getElementById('manualNum').value.trim();
+  if (!set || !num) { alert('Enter both a set code and collector number.'); return; }
+  showLoading('Looking up on Scryfall…');
+  await scryfallLookup(set, num);
+}
+
+// UI helpers
+function showLoading(msg) {
+  document.getElementById('resultPanel').classList.add('on');
+  document.getElementById('loading').classList.add('on');
+  document.getElementById('loadingMsg').textContent = msg || 'Loading…';
+  document.getElementById('errorBox').classList.remove('on');
+  document.getElementById('cardDisplay').classList.remove('on');
+}
+function hideLoading() {
+  document.getElementById('loading').classList.remove('on');
+}
+function setLoadMsg(m) { document.getElementById('loadingMsg').textContent = m; }
+function showError(msg) {
+  hideLoading();
+  document.getElementById('resultPanel').classList.add('on');
+  const e = document.getElementById('errorBox');
+  e.textContent = msg;
+  e.classList.add('on');
+  document.getElementById('cardDisplay').classList.remove('on');
+}
+function setStatus(msg) { document.getElementById('statusTxt').textContent = msg; }
+</script>
+</body>
+</html>
